@@ -1,1 +1,1 @@
-# Learning_Physical_Invariants_from_Unsupervised_Video
+# Learning Physical Invariants from Unsupervised Video
