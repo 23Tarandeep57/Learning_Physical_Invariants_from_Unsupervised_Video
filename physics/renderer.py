@@ -98,7 +98,7 @@ class Renderer:
             self._display_initialized = True
 
         res = self.config.resolution
-        display_size = max(400, res)
+        display_size = res
         screen = pygame.display.set_mode((display_size, display_size))
         pygame.display.set_caption('Physics Simulator')
         clock = pygame.time.Clock()
