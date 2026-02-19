@@ -1,2 +1,10 @@
 __pycache__/
 venv/
+research_notes*
+
+# tempo
+train_widerange.py
+stress_test_hybrid.py
+results/checkpoints/hybrid_jump_wide.pth
+results/plots/widerange_training.png
+results/plots/stress_test_hybrid.png
