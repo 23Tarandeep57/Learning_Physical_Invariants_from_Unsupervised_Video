@@ -1,6 +1,6 @@
 import numpy as np
-from typing import List, Tuple, Optional, Dict
-from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass
 import os
 
 import physics as P
@@ -11,7 +11,6 @@ import pygame
 
 @dataclass
 class AppearanceConfig:
-    """Nuisance variables — affect pixels, never physics."""
     resolution: int = P.RESOLUTION
     ball_colors: Optional[List[Tuple[int,int,int]]] = None
     outline: bool = False
@@ -21,7 +20,6 @@ class AppearanceConfig:
 
 
 class Renderer:
-    """Maps physics state → pixel frames."""
 
     def __init__(self, world_width: float, world_height: float,
                  config: Optional[AppearanceConfig] = None):
@@ -48,7 +46,7 @@ class Renderer:
 
     def render(self, state: np.ndarray, radii: np.ndarray,
                colors: Optional[List[Tuple[int,int,int]]] = None) -> np.ndarray:
-        """Render single frame → (res, res, 3) uint8."""
+
         res = self.config.resolution
         n_balls = state.shape[0]
         if colors is None:
@@ -76,7 +74,7 @@ class Renderer:
     def render_trajectory(self, trajectory: Dict,
                           colors: Optional[List[Tuple[int,int,int]]] = None
                           ) -> np.ndarray:
-        """Render full trajectory → (T+1, res, res, 3) uint8."""
+
         states = trajectory['states']
         radii = trajectory['full_states'][0, :, 4]
         T = states.shape[0]
@@ -92,7 +90,7 @@ class Renderer:
 
     def play(self, trajectory: Dict, fps: int = 30,
              colors: Optional[List[Tuple[int,int,int]]] = None):
-        """Play trajectory in pygame window. Press Q to exit."""
+
         if not self._display_initialized:
             pygame.init()
             self._display_initialized = True
@@ -131,7 +129,7 @@ class Renderer:
 
 
 def save_frames_as_video(frames: np.ndarray, path: str, fps: int = 30):
-    """Save frames as individual PNGs."""
+
     os.makedirs(path, exist_ok=True)
     for t in range(len(frames)):
         surf = pygame.surfarray.make_surface(frames[t].transpose(1, 0, 2))

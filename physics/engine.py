@@ -1,23 +1,16 @@
-"""
-2D Physics Engine — deterministic elastic collision simulator.
+"""Deterministic 2D elastic collision simulator."""
 
-- N balls in a rectangular container
-- Elastic ball-ball & ball-wall collisions
-- No gravity/friction (Phase 1), optional (Phase 4)
-- State per ball: (x, y, vx, vy, radius, mass)
-"""
+import copy
 
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Tuple, Optional, Dict
+from typing import Dict, List, Optional, Tuple
 
 import physics as P
-import copy
 
 
 @dataclass
 class Ball:
-    """Physics-only state container. No appearance variables."""
     x: float
     y: float
     vx: float
@@ -157,10 +150,6 @@ class PhysicsEngine:
                 ball.vy = -abs(ball.vy)
 
     def _resolve_ball_collisions(self):
-        """
-        Elastic collision resolution.
-        Convention: normal i→j, dv = vj-vi, resolve when dvn < 0.
-        """
         n = len(self.balls)
         for i in range(n):
             for j in range(i + 1, n):
@@ -180,7 +169,7 @@ class PhysicsEngine:
 
                 nx, ny = dx / dist, dy / dist
 
-                # Separate (mass-weighted)
+
                 overlap = min_dist - dist
                 inv_total = 1.0 / (bi.mass + bj.mass)
                 bi.x -= nx * overlap * bj.mass * inv_total
@@ -188,7 +177,7 @@ class PhysicsEngine:
                 bj.x += nx * overlap * bi.mass * inv_total
                 bj.y += ny * overlap * bi.mass * inv_total
 
-                # Relative velocity along normal
+
                 dvn = (bj.vx - bi.vx) * nx + (bj.vy - bi.vy) * ny
                 if dvn < 0:
                     impulse = (2.0 * dvn) / ((1.0 / bi.mass) + (1.0 / bj.mass))
@@ -201,14 +190,10 @@ class PhysicsEngine:
                         'time': self.time, 'ball_i': bi.ball_id, 'ball_j': bj.ball_id,
                     })
 
-    # State access
-
     def get_state(self) -> np.ndarray:
-        """(n_balls, 4) → [x, y, vx, vy]"""
         return np.array([b.state for b in self.balls])
 
     def get_full_state(self) -> np.ndarray:
-        """(n_balls, 6) → [x, y, vx, vy, radius, mass]"""
         return np.array([b.full_state for b in self.balls])
 
     def set_state(self, state: np.ndarray):
@@ -216,7 +201,7 @@ class PhysicsEngine:
         for i, ball in enumerate(self.balls):
             ball.x, ball.y, ball.vx, ball.vy = state[i]
 
-    # Interventions (do-operator)
+
 
     def remove_ball(self, ball_id: int):
         self.intervention_log.append({
@@ -242,7 +227,7 @@ class PhysicsEngine:
             if b.ball_id == ball_id:
                 b.x, b.y = new_x, new_y
 
-    # Conserved quantities
+
 
     def total_kinetic_energy(self) -> float:
         return sum(0.5 * b.mass * (b.vx**2 + b.vy**2) for b in self.balls)
@@ -268,7 +253,6 @@ class PhysicsEngine:
 
 def generate_trajectory(config: WorldConfig, n_steps: int = 200,
                         n_substeps: int = 4) -> Dict:
-    """Returns dict with states, full_states, energy, momentum, com, collisions."""
     engine = PhysicsEngine(config)
     engine.initialize()
 

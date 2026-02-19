@@ -13,25 +13,8 @@ import matplotlib.pyplot as plt
 import os
 import physics as P
 from physics.engine import generate_trajectory, WorldConfig
-from models.force_egnn import ForceEGNN, symplectic_euler_step
-
-
-def load_force_model(device):
-    model = ForceEGNN(n_balls=P.N_BALLS, hidden_dim=64, n_layers=3).to(device)
-    model.load_state_dict(torch.load('results/checkpoints/force_egnn.pth', map_location=device))
-    model.eval()
-    return model
-
-
-def rollout(model, init_state, n_steps, dt, device):
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            acc = model(current)
-            current = symplectic_euler_step(current, acc, dt)
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
+from models.checkpoints import load_force_egnn
+from models.rollout import rollout_force
 
 
 def find_collision_steps(traj, dt):
@@ -49,7 +32,7 @@ def find_collision_steps(traj, dt):
 
 def analyze():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = load_force_model(device)
+    model = load_force_egnn(device)
     dt = P.DT
     n_steps = 200
     os.makedirs('results/plots', exist_ok=True)

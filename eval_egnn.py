@@ -4,80 +4,9 @@ import matplotlib.pyplot as plt
 import os
 import physics as P
 from physics.engine import generate_trajectory, WorldConfig
-from models.mlp_dynamics import MLPDynamics
-from models.egnn_dynamics import EGNNDynamics
-
-
-def load_mlp(device):
-    model = MLPDynamics(n_balls=P.N_BALLS).to(device)
-    model.load_state_dict(torch.load('results/checkpoints/mlp_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/mlp_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-
-def load_egnn(device):
-    model = EGNNDynamics(n_balls=P.N_BALLS, hidden_dim=64, n_layers=3).to(device)
-    model.load_state_dict(torch.load('results/checkpoints/egnn_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/egnn_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-
-def rollout_mlp(model, stats, init_state, n_steps, device):
-    """Autoregressive rollout with MLP."""
-    x_mean = torch.FloatTensor(stats['x_mean']).to(device)
-    x_std = torch.FloatTensor(stats['x_std']).to(device)
-    y_mean = torch.FloatTensor(stats['y_mean']).to(device)
-    y_std = torch.FloatTensor(stats['y_std']).to(device)
-
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        for _ in range(n_steps):
-            norm_in = (current - x_mean) / x_std
-            norm_delta = model(norm_in)
-            delta = norm_delta * y_std + y_mean
-            current = current + delta
-            states.append(current.cpu().numpy()[0])
-
-    return np.array(states)
-
-
-def rollout_egnn(model, stats, init_state, n_steps, device):
-    """Autoregressive rollout with EGNN."""
-    y_mean = torch.FloatTensor(stats['y_mean']).to(device)
-    y_std = torch.FloatTensor(stats['y_std']).to(device)
-
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        for _ in range(n_steps):
-            pred_delta = model(current)  # raw-scale residual
-            current = current + pred_delta
-            states.append(current.cpu().numpy()[0])
-
-    return np.array(states)
-
-
-def compute_energy(states, masses=None):
-    """Compute total KE at each timestep. states: (T, N, 4)"""
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    velocities = states[:, :, 2:]  # (T, N, 2)
-    ke_per_ball = 0.5 * masses[None, :, None] * velocities ** 2  # (T, N, 2)
-    return ke_per_ball.sum(axis=(1, 2))  # (T,)
-
-
-def compute_momentum(states, masses=None):
-    """Compute total momentum magnitude at each timestep."""
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    velocities = states[:, :, 2:]  # (T, N, 2)
-    p = (masses[None, :, None] * velocities).sum(axis=1)  # (T, 2)
-    return np.linalg.norm(p, axis=1)  # (T,)
+from physics.metrics import compute_energy, compute_momentum
+from models.checkpoints import load_mlp, load_egnn
+from models.rollout import rollout_mlp, rollout_egnn
 
 
 def evaluate():
@@ -86,7 +15,6 @@ def evaluate():
     n_test_seeds = 5  # average over multiple trajectories
     os.makedirs('results/plots', exist_ok=True)
 
-    # Load models
     try:
         mlp_model, mlp_stats = load_mlp(device)
         print("Loaded MLP baseline.")
@@ -139,7 +67,6 @@ def evaluate():
 
     
     print("MLP (Level 0) vs EGNN (Level 1)")
-
 
     for step in [1, 10, 50, 100, 200]:
         print(f"\nStep {step:3d}:")

@@ -20,121 +20,15 @@ import matplotlib.pyplot as plt
 import os
 import physics as P
 from physics.engine import generate_trajectory, WorldConfig
-from models.mlp_dynamics import MLPDynamics
-from models.egnn_dynamics import EGNNDynamics
-from models.force_egnn import ForceEGNN, symplectic_euler_step, leapfrog_step
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Model loading
-# ═══════════════════════════════════════════════════════════════════
-
-def load_mlp(device):
-    model = MLPDynamics(n_balls=P.N_BALLS).to(device)
-    model.load_state_dict(torch.load('results/checkpoints/mlp_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/mlp_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-def load_egnn(device):
-    model = EGNNDynamics(n_balls=P.N_BALLS, hidden_dim=64, n_layers=3).to(device)
-    model.load_state_dict(torch.load('results/checkpoints/egnn_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/egnn_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-def load_force_egnn(device):
-    model = ForceEGNN(
-        n_balls=P.N_BALLS, hidden_dim=64, n_layers=3,
-        world_width=P.WORLD_WIDTH, world_height=P.WORLD_HEIGHT
-    ).to(device)
-    # Try best checkpoint first, fall back to final
-    ckpt_path = 'results/checkpoints/force_egnn_best.pth'
-    if not os.path.exists(ckpt_path):
-        ckpt_path = 'results/checkpoints/force_egnn.pth'
-    model.load_state_dict(torch.load(ckpt_path, map_location=device))
-    model.eval()
-    return model
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Rollout functions
-# ═══════════════════════════════════════════════════════════════════
-
-def rollout_mlp(model, stats, init_state, n_steps, device):
-    x_mean = torch.FloatTensor(stats['x_mean']).to(device)
-    x_std = torch.FloatTensor(stats['x_std']).to(device)
-    y_mean = torch.FloatTensor(stats['y_mean']).to(device)
-    y_std = torch.FloatTensor(stats['y_std']).to(device)
-
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            norm_in = (current - x_mean) / x_std
-            norm_delta = model(norm_in)
-            delta = norm_delta * y_std + y_mean
-            current = current + delta
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-def rollout_egnn(model, stats, init_state, n_steps, device):
-    y_mean = torch.FloatTensor(stats['y_mean']).to(device)
-    y_std = torch.FloatTensor(stats['y_std']).to(device)
-
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            pred_delta = model(current)
-            current = current + pred_delta
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-def rollout_force_egnn(model, init_state, n_steps, device, dt=P.DT,
-                       integrator='symplectic_euler'):
-    """Force model rollout: predict acceleration → integrate."""
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            if integrator == 'leapfrog':
-                current = leapfrog_step(current, model, dt)
-            else:
-                acc = model(current)
-                current = symplectic_euler_step(current, acc, dt)
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Physics metrics
-# ═══════════════════════════════════════════════════════════════════
-
-def compute_energy(states, masses=None):
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    vel = states[:, :, 2:]
-    ke = 0.5 * masses[None, :, None] * vel ** 2
-    return ke.sum(axis=(1, 2))
-
-def compute_momentum(states, masses=None):
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    vel = states[:, :, 2:]
-    p = (masses[None, :, None] * vel).sum(axis=1)
-    return np.linalg.norm(p, axis=1)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Main evaluation
-# ═══════════════════════════════════════════════════════════════════
+from physics.metrics import compute_energy, compute_momentum
+from models.checkpoints import load_mlp, load_egnn, load_force_egnn
+from models.rollout import rollout_mlp, rollout_egnn, rollout_force
 
 COLORS = {
-    'MLP':   '#e74c3c',  # red
-    'EGNN':  '#2ecc71',  # green
-    'Force': '#3498db',  # blue
-    'True':  '#2c3e50',  # dark
+    'MLP':   '#e74c3c',
+    'EGNN':  '#2ecc71',
+    'Force': '#3498db',
+    'True':  '#2c3e50',
 }
 
 def evaluate():
@@ -143,7 +37,6 @@ def evaluate():
     n_test_seeds = 5
     os.makedirs('results/plots', exist_ok=True)
 
-    # ── Load all models ──
     models = {}
     try:
         mlp_model, mlp_stats = load_mlp(device)
@@ -170,7 +63,6 @@ def evaluate():
         print("No models found. Train at least one model first.")
         return
 
-    # ── Collect metrics ──
     all_mse = {name: [] for name in models}
     all_energy = {name: [] for name in models}
     all_energy_true = []
@@ -193,7 +85,7 @@ def evaluate():
             elif kind == 'egnn':
                 pred = rollout_egnn(model, stats, true_states[0], n_steps, device)
             elif kind == 'force':
-                pred = rollout_force_egnn(model, true_states[0], n_steps, device)
+                pred = rollout_force(model, true_states[0], n_steps, device)
 
             mse = np.mean((true_states - pred) ** 2, axis=(1, 2))
             all_mse[name].append(mse)
@@ -207,7 +99,6 @@ def evaluate():
     avg_mom = {n: np.mean(v, axis=0) for n, v in all_mom.items()}
     avg_mom_true = np.mean(all_mom_true, axis=0)
 
-    # ── Print summary table ──
     print("\n" + "=" * 72)
     print("ABLATION RESULTS: Level 0 (MLP) vs Level 1 (EGNN) vs Level 2 (Force)")
     print("=" * 72)
@@ -240,9 +131,7 @@ def evaluate():
         rel_err = np.abs(avg_energy[name] - avg_energy_true) / (avg_energy_true + 1e-8)
         print(f"  {name:>8}: {rel_err.mean()*100:.2f}%")
 
-    # ═══════════════════════════════════════════════════════════════
-    # Plot 1: 4-panel ablation (like the L0 vs L1 plot, now with L2)
-    # ═══════════════════════════════════════════════════════════════
+    # Plot 1: 4-panel ablation
     fig, axes = plt.subplots(2, 2, figsize=(14, 10))
     fig.suptitle('Ablation: Level 0 (MLP) → Level 1 (EGNN) → Level 2 (Force EGNN)',
                  fontsize=14, fontweight='bold')
@@ -304,9 +193,7 @@ def evaluate():
     plt.savefig('results/plots/ablation_all_levels.png', dpi=150)
     plt.close()
 
-    # ═══════════════════════════════════════════════════════════════
     # Plot 2: Single trajectory per-ball comparison
-    # ═══════════════════════════════════════════════════════════════
     config = WorldConfig(seed=999)
     traj = generate_trajectory(config, n_steps=n_steps)
     true = traj['states']
@@ -319,7 +206,7 @@ def evaluate():
         elif kind == 'egnn':
             preds[name] = rollout_egnn(model, stats, true[0], n_steps, device)
         elif kind == 'force':
-            preds[name] = rollout_force_egnn(model, true[0], n_steps, device)
+            preds[name] = rollout_force(model, true[0], n_steps, device)
 
     fig, axes = plt.subplots(P.N_BALLS, 2, figsize=(14, 4 * P.N_BALLS))
     if P.N_BALLS == 1:
@@ -341,9 +228,7 @@ def evaluate():
     plt.savefig('results/plots/trajectory_all_levels.png', dpi=150)
     plt.close()
 
-    # ═══════════════════════════════════════════════════════════════
-    # Plot 3: Energy over time for the single trajectory (detailed)
-    # ═══════════════════════════════════════════════════════════════
+    # Plot 3: Energy over time (single trajectory)
     fig, ax = plt.subplots(figsize=(12, 5))
     true_e = compute_energy(true, masses)
     ax.plot(steps, true_e, label='Ground Truth', color=COLORS['True'],

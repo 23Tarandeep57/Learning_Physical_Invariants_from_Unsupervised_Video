@@ -26,135 +26,18 @@ import matplotlib.pyplot as plt
 import os
 import physics as P
 from physics.engine import generate_trajectory, WorldConfig
-from models.mlp_dynamics import MLPDynamics
-from models.egnn_dynamics import EGNNDynamics
-from models.force_egnn import ForceEGNN, symplectic_euler_step
+from physics.metrics import compute_energy, compute_momentum
+from models.checkpoints import load_mlp, load_egnn, load_force_egnn
+from models.rollout import rollout_mlp, rollout_egnn, rollout_force
 
 
-# ═══════════════════════════════════════════════════════════════════
-# Model loading
-# ═══════════════════════════════════════════════════════════════════
-
-def load_mlp(device):
-    model = MLPDynamics(n_balls=P.N_BALLS).to(device)
-    model.load_state_dict(torch.load(
-        'results/checkpoints/mlp_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/mlp_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-
-def load_egnn(device):
-    model = EGNNDynamics(n_balls=P.N_BALLS, hidden_dim=64, n_layers=3).to(device)
-    model.load_state_dict(torch.load(
-        'results/checkpoints/egnn_baseline.pth', map_location=device))
-    stats = torch.load('results/checkpoints/egnn_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-
-def load_force_egnn(device):
-    model = ForceEGNN(n_balls=P.N_BALLS, hidden_dim=64, n_layers=3).to(device)
-    model.load_state_dict(torch.load(
-        'results/checkpoints/force_egnn.pth', map_location=device))
-    stats = torch.load('results/checkpoints/force_egnn_stats.pth', weights_only=False)
-    model.eval()
-    return model, stats
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Rollout functions
-# ═══════════════════════════════════════════════════════════════════
-
-def rollout_mlp(model, stats, init_state, n_steps, device):
-    x_mean = torch.FloatTensor(stats['x_mean']).to(device)
-    x_std = torch.FloatTensor(stats['x_std']).to(device)
-    y_mean = torch.FloatTensor(stats['y_mean']).to(device)
-    y_std = torch.FloatTensor(stats['y_std']).to(device)
-
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            norm_in = (current - x_mean) / x_std
-            norm_delta = model(norm_in)
-            delta = norm_delta * y_std + y_mean
-            current = current + delta
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-
-def rollout_egnn(model, stats, init_state, n_steps, device):
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            pred_delta = model(current)
-            current = current + pred_delta
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-
-def rollout_force_euler(model, init_state, n_steps, dt, device):
-    """Force model + standard Euler integrator."""
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            acc = model(current)  # (1, N, 2)
-            pos = current[:, :, :2]
-            vel = current[:, :, 2:]
-            # Standard (explicit) Euler:
-            #   x_{t+1} = x_t + v_t * dt
-            #   v_{t+1} = v_t + a_t * dt
-            new_pos = pos + vel * dt
-            new_vel = vel + acc * dt
-            current = torch.cat([new_pos, new_vel], dim=-1)
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-
-def rollout_force_symplectic(model, init_state, n_steps, dt, device):
-    """Force model + symplectic Euler integrator."""
-    states = [init_state.copy()]
-    current = torch.FloatTensor(init_state).unsqueeze(0).to(device)
-    with torch.no_grad():
-        for _ in range(n_steps):
-            acc = model(current)  # (1, N, 2)
-            current = symplectic_euler_step(current, acc, dt)
-            states.append(current.cpu().numpy()[0])
-    return np.array(states)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Physics metrics
-# ═══════════════════════════════════════════════════════════════════
-
-def compute_energy(states, masses=None):
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    vel = states[:, :, 2:]
-    return (0.5 * masses[None, :, None] * vel ** 2).sum(axis=(1, 2))
-
-
-def compute_momentum(states, masses=None):
-    if masses is None:
-        masses = np.ones(states.shape[1])
-    vel = states[:, :, 2:]
-    p = (masses[None, :, None] * vel).sum(axis=1)
-    return np.linalg.norm(p, axis=1)
-
-
-# ═══════════════════════════════════════════════════════════════════
-# Main ablation
-# ═══════════════════════════════════════════════════════════════════
 
 COLORS = {
-    'mlp':       '#e74c3c',  # red
-    'egnn':      '#2ecc71',  # green
-    'force_e':   '#3498db',  # blue
-    'force_s':   '#9b59b6',  # purple
-    'true':      '#2c3e50',  # dark gray
+    'mlp':       '#e74c3c',
+    'egnn':      '#2ecc71',
+    'force_e':   '#3498db',
+    'force_s':   '#9b59b6',
+    'true':      '#2c3e50',
 }
 
 LABELS = {
@@ -230,15 +113,15 @@ def evaluate():
             metrics['egnn']['momentum'].append(compute_momentum(pred, masses))
 
         # Force + Euler
-        fm, fs = models['force']
-        pred = rollout_force_euler(fm, true_states[0], n_steps, dt, device)
+        fm = models['force']
+        pred = rollout_force(fm, true_states[0], n_steps, device, dt=dt, integrator='euler')
         metrics['force_e']['mse'].append(
             np.mean((true_states - pred) ** 2, axis=(1, 2)))
         metrics['force_e']['energy'].append(compute_energy(pred, masses))
         metrics['force_e']['momentum'].append(compute_momentum(pred, masses))
 
         # Force + Symplectic
-        pred = rollout_force_symplectic(fm, true_states[0], n_steps, dt, device)
+        pred = rollout_force(fm, true_states[0], n_steps, device, dt=dt, integrator='symplectic_euler')
         metrics['force_s']['mse'].append(
             np.mean((true_states - pred) ** 2, axis=(1, 2)))
         metrics['force_s']['energy'].append(compute_energy(pred, masses))
@@ -252,9 +135,7 @@ def evaluate():
             if len(metrics[key][metric_name]) > 0:
                 avg[key][metric_name] = np.mean(metrics[key][metric_name], axis=0)
 
-    # ══════════════════════════════════════════════════════════════
-    # Print summary table
-    # ══════════════════════════════════════════════════════════════
+
     print("\n" + "=" * 70)
     print("3-AXIS FACTORIZED ABLATION RESULTS")
     print("=" * 70)
@@ -283,9 +164,6 @@ def evaluate():
     for k in model_keys:
         print(f"{LABELS[k]:<30} {avg[k]['momentum'][-1]:>10.4f}")
 
-    # ══════════════════════════════════════════════════════════════
-    # Ablation isolation analysis
-    # ══════════════════════════════════════════════════════════════
     print("\n" + "=" * 70)
     print("WHAT EACH COMPARISON ISOLATES")
     print("=" * 70)
@@ -313,9 +191,6 @@ def evaluate():
         else:
             print(f"   → Marginal difference. Both integrators similar for this dt.")
 
-    # ══════════════════════════════════════════════════════════════
-    # Plots
-    # ══════════════════════════════════════════════════════════════
     steps = np.arange(n_steps + 1)
 
     fig, axes = plt.subplots(2, 3, figsize=(20, 11))
@@ -416,7 +291,7 @@ def evaluate():
     config = WorldConfig(seed=999)
     traj = generate_trajectory(config, n_steps=n_steps)
     true = traj['states']
-    fm, fs = models['force']
+    fm = models['force']
 
     rollouts = {'true': true}
     if 'mlp' in models:
@@ -425,8 +300,8 @@ def evaluate():
     if 'egnn' in models:
         m, s = models['egnn']
         rollouts['egnn'] = rollout_egnn(m, s, true[0], n_steps, device)
-    rollouts['force_e'] = rollout_force_euler(fm, true[0], n_steps, dt, device)
-    rollouts['force_s'] = rollout_force_symplectic(fm, true[0], n_steps, dt, device)
+    rollouts['force_e'] = rollout_force(fm, true[0], n_steps, device, dt=dt, integrator='euler')
+    rollouts['force_s'] = rollout_force(fm, true[0], n_steps, device, dt=dt, integrator='symplectic_euler')
 
     fig, axes = plt.subplots(P.N_BALLS, 2, figsize=(16, 4.5 * P.N_BALLS))
     if P.N_BALLS == 1:

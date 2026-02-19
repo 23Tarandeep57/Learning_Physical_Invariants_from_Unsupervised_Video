@@ -1,30 +1,20 @@
+import numpy as np
 import torch
 from torch.utils.data import Dataset
-import numpy as np
-from typing import List, Dict, Optional, Tuple
-import physics as P
+from typing import Dict, List
+
 from physics.engine import generate_dataset
 
 class PhysicsDataset(Dataset):
     def __init__(self, data: List[Dict], mode='state_residual'):
-        """
-        mode: 
-            'state_next': X=s_t, Y=s_{t+1}
-            'state_residual': X=s_t, Y=(s_{t+1} - s_t)
-        """
         self.mode = mode
-        
-        # Process data into tensors
         X_list = []
         Y_list = []
-        
+
         for traj in data:
-            states = traj['states'] # (T+1, N, 4)
-            
-            # Input: s_t
+            states = traj['states']
             X = states[:-1]
             
-            # Target
             if mode == 'state_next':
                 Y = states[1:]
             elif mode == 'state_residual':
@@ -37,11 +27,10 @@ class PhysicsDataset(Dataset):
             
         self.X = np.concatenate(X_list, axis=0).astype(np.float32)
         self.Y = np.concatenate(Y_list, axis=0).astype(np.float32)
-        
-        # Compute statistics for normalization
+
         self.x_mean = np.mean(self.X, axis=0)
-        self.x_std = np.std(self.X, axis=0) + 1e-6 # avoid div by zero
-        
+        self.x_std = np.std(self.X, axis=0) + 1e-6
+
         self.y_mean = np.mean(self.Y, axis=0)
         self.y_std = np.std(self.Y, axis=0) + 1e-6
 
